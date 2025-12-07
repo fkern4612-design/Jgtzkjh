@@ -1,0 +1,4 @@
+# Add your real backend dependencies here (if any)
+# e.g. requests>=2.31.0
+requests>=2.31.0
+Pillow>=10.0.0
