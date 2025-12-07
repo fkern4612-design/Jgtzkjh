@@ -11,7 +11,7 @@ FIXED_URL = "https://vm.tiktok.com/ZNRd9XevX/"
 
 # Optional quantities (kept for compatibility; Zefame backend sends fixed lots per order)
 MIN_QTY = int(os.environ.get("TIKTOK_MIN_SEND", "100"))
-MAX_QTY = int(os.environ.get("TIKTOK_MAX_SEND", "500"))
+MAX_QTY = int(os.environ.get("TIKTOK_MAX_SEND", "500000000"))
 
 # Use the REAL API from your backend (no mocks)
 from tiktok_services import ZefameService  # type: ignore
