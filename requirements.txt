@@ -2,3 +2,4 @@
 # e.g. requests>=2.31.0
 requests>=2.31.0
 Pillow>=10.0.0
+gunicorn
