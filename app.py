@@ -188,30 +188,51 @@ def run_scheduler():
                     # Prefer explicit wait parsed from message if failure indicated scheduling
                     parsed_wait = 0 if success else parse_wait_message(msg)
                     if parsed_wait and parsed_wait > 0:
-                        next_run[sid] = now + max(30, parsed_wait)  # ensure at least 60s cadence
+                        next_run[sid] = now + max(30, parsed_wait)
 
-                        # Log the exact next run time and ETA
                         eta = int(max(0, next_run[sid] - time.time()))
                         print(f'[{label}] Next run @ ' + time.strftime('%H:%M:%S', time.localtime(next_run[sid])) + f' (in ~{eta//60}m {eta%60}s)')
                     else:
                         delay = parse_timer_seconds(meta.get("timer") or "", success=success)
-                        next_run[sid] = now + max(30, delay)  # attempt at least every minute
+                        next_run[sid] = now + max(30, delay)
 
-                # Log the exact next run time and ETA
                 eta = int(max(0, next_run[sid] - time.time()))
                 print(f'[{label}] Next run @ ' + time.strftime('%H:%M:%S', time.localtime(next_run[sid])) + f' (in ~{eta//60}m {eta%60}s)')
 
                 did_any = True
             except Exception as e:
                 print(f"[{label}] ❌ Order error: {e}")
-                # Backoff on error
                 next_run[sid] = now + 30
 
         if _shutdown["stop"]:
             break
-        # Avoid tight loop; check every second for due services
         if not did_any:
             time.sleep(1)
+
+
+# ----------------------------
+# KEEP-ALIVE PINGER (for Render free dyno)
+# ----------------------------
+KEEPALIVE_URL = os.environ.get("KEEPALIVE_URL")
+
+def keepalive_loop():
+    """Periodically pings the service itself so Render does not suspend the process."""
+    url = KEEPALIVE_URL
+    if not url:
+        render_url = os.environ.get("RENDER_EXTERNAL_URL")
+        if render_url:
+            url = render_url.rstrip("/") + "/health"
+        else:
+            print("[KEEPALIVE] No RENDER_EXTERNAL_URL, keepalive disabled.")
+            return
+
+    print(f"[KEEPALIVE] Active, pinging {url} every 20 seconds")
+    while True:
+        try:
+            requests.get(url, timeout=5)
+        except Exception as e:
+            print(f"[KEEPALIVE] Error: {e}")
+        time.sleep(20)
 
 
 # ----------------------------
@@ -219,34 +240,36 @@ def run_scheduler():
 # ----------------------------
 app = Flask(__name__)
 
-# Track scheduler thread so we only start it once per process
 _scheduler_started = False
 _scheduler_thread = None
 
 
 def _start_scheduler_thread():
-    """Start the scheduler in a background daemon thread. Safe to call multiple times."""
+    """Start the scheduler and keepalive in background daemon threads."""
     global _scheduler_started, _scheduler_thread
     if _scheduler_started:
         return
     _scheduler_started = True
-    # Start `main` function in thread. main will try to register signal handlers but those calls are ignored when not possible.
+
+    # Scheduler thread
     _scheduler_thread = threading.Thread(target=main, name="tiktok-scheduler", daemon=True)
     _scheduler_thread.start()
     print("[INFO] Scheduler thread started in background.")
 
+    # Keepalive thread
+    ka = threading.Thread(target=keepalive_loop, name="keepalive", daemon=True)
+    ka.start()
+    print("[INFO] Keepalive thread started.")
+
 
 @app.before_request
 def _ensure_scheduler():
-    # Start scheduler only once
     if os.environ.get("DISABLE_AUTO_SCHEDULER", "0") in ("0", "", "false", "False", "no"):
         _start_scheduler_thread()
 
 
-
-@app.route("/start", methods=["POST"])  # POST to avoid accidental starts
+@app.route("/start", methods=["POST"])
 def http_start():
-    """HTTP endpoint to (re)start the background scheduler in this process."""
     _start_scheduler_thread()
     return jsonify({"status": "started"}), 202
 
@@ -263,7 +286,6 @@ def index():
 
 
 def main():
-    # Handle SIGTERM/SIGINT when running in main thread/process
     try:
         signal.signal(signal.SIGTERM, _handle_signal)
         signal.signal(signal.SIGINT, _handle_signal)
@@ -275,18 +297,16 @@ def main():
     print("Excluding Followers (service id 228)")
 
     try:
-        # run_scheduler will internally loop until _shutdown flag is set
         run_scheduler()
     except Exception as e:
         print("[FATAL] Scheduler exception:", e)
     print("Exiting continuous runner.")
 
 
-# Auto-start scheduler on import if requested (useful for single-worker setups)
+# Auto-start scheduler on import if requested
 if os.environ.get("START_SCHEDULER_ON_IMPORT", "0") in ("1", "true", "True"):
     _start_scheduler_thread()
 
-# If run directly, run main() (same behavior as original file)
+# Run main() if executed directly
 if __name__ == "__main__":
     main()
-
